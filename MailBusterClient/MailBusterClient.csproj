@@ -7,7 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\..\MailBuster\MailBuster.csproj" />
+    <ProjectReference Include="..\..\..\MailBuster\MailBusterEngine.csproj" />
   </ItemGroup>
 
 </Project>
