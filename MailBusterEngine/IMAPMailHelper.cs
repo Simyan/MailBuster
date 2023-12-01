@@ -10,6 +10,8 @@ using System.Linq;
 using MailKit.Net.Pop3;
 using Microsoft.Extensions.Configuration;
 
+
+
 namespace MailBuster{
     public class IMAPMailHelper 
     {
@@ -152,8 +154,12 @@ namespace MailBuster{
         {
             var emails = iterateInbox();
             analyzeUnsubscribeLink(emails);
+            var result = analyze(emails).ToList();
+            WriteToFile(result);
+
         }
 
+        
 
         public List<EmailDto> iterateInbox()
         {
@@ -199,6 +205,73 @@ namespace MailBuster{
             emails.Add(emailDto);
 
         }
+
+        public class datesByEmail
+        {
+            public List<DateTime> sentOnList { get; set; }
+            //string from;
+        }
+
+
+        public class EmailAnalytics
+        {
+            public string Email { get; set; }
+            public double AverageGap { get; set; }
+            public int Count { get; set; }
+            public Double Score { get; set; }
+            //string from;
+        }
+
+
+
+        public IEnumerable<EmailAnalytics> analyze(List<EmailDto> emails)
+        {
+
+            Dictionary<string, datesByEmail> ls = new Dictionary<string, datesByEmail>();
+           
+
+            foreach (var email in emails)
+            {
+                var tmp = new datesByEmail() { sentOnList = new List<DateTime> { email.sentOn } };
+                if (!ls.ContainsKey(email.from))
+                {
+                    ls.Add(email.from, tmp);
+                }
+                else
+                {
+                    ls[email.from].sentOnList.Add(email.sentOn);
+                }
+            }
+
+
+            Dictionary<string, Double> AvgList = new Dictionary<string, double>();
+            List<EmailAnalytics> emailAnalyticsLs = new List<EmailAnalytics>();
+            foreach (var item in ls)
+            {
+                var dateList = item.Value.sentOnList;
+                var gaps = item.Value.sentOnList.Zip(dateList.Skip(1), (d1, d2) => (d2 - d1).TotalDays).ToList();
+                var avg = gaps.Count != 0 ? gaps.Average() : -1;
+                emailAnalyticsLs.Add(new EmailAnalytics() 
+                                        { 
+                                            Email = item.Key, 
+                                            AverageGap = avg, 
+                                            Count = dateList.Count(), 
+                                            Score = dateList.Count() / avg
+                                        });
+
+            }
+
+            var x = emailAnalyticsLs
+                        .Where(w => w.Count > 5 || w.AverageGap > 1 || w.AverageGap == -1)
+                        .OrderByDescending(o => o.Score);
+            var y = emailAnalyticsLs.OrderByDescending(o => o.Count).ThenByDescending(o => o.Score);
+            return y;
+        }
+
+
+        
+
+        
 
         public void analyzeUnsubscribeLink(List<EmailDto> emails)
         {
@@ -361,6 +434,18 @@ namespace MailBuster{
             foreach (var item in content) 
             {
                 File.AppendAllText($"{basePath}SortedMailCountPerSender.txt", $"{item.Key}: {item.Value} \n" );
+            }
+        }
+
+        public void WriteToFile(List<EmailAnalytics> content)
+        {
+            string json = JsonConvert.SerializeObject(content);
+            File.AppendAllText($"{basePath}EmailAnalytics.json", json); 
+            foreach (var item in content)
+            {
+                //string json = JsonConvert.SerializeObject(item);
+                //File.AppendAllText($"{basePath}EmailAnalytics.json", json + "\n");
+                File.AppendAllText($"{basePath}EmailAnalytics.txt", $"Email: {item.Email}, AvgGap: {item.AverageGap}, Count: {item.Count}, Score: {item.Score} \n");
             }
         }
 
