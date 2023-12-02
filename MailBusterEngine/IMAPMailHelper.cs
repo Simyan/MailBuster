@@ -9,7 +9,8 @@ using System.IO;
 using System.Linq;
 using MailKit.Net.Pop3;
 using Microsoft.Extensions.Configuration;
-
+using System.Threading.Tasks;
+using System.Threading;
 
 
 namespace MailBuster{
@@ -17,12 +18,11 @@ namespace MailBuster{
     {
         private readonly IConfiguration _configuration;
 
-        ImapClient client = new ImapClient(); 
-        //Pop3Client client = new Pop3Client(); 
-        IMailFolder inbox;
+        
 
         static string basePath = "..\\..\\..\\Filestore\\";
         static string trackerPath = $"{basePath}tracker.txt";
+        ConnectionInfo gmail;
 
         class ConnectionInfo
         {
@@ -31,6 +31,7 @@ namespace MailBuster{
             public bool isSSL { get; set; }
             public string email { get; set; }
             public string password { get; set; }
+
         }
 
         public IMAPMailHelper()
@@ -46,22 +47,22 @@ namespace MailBuster{
             string password = _configuration["password"];
 
             //ConnectionInfo gmail = new ConnectionInfo { email = "abc@gmail.com", Host = "imap.gmail.com", isSSL = true, password = "password", port = 993 };
-            ConnectionInfo gmail = new ConnectionInfo { email = email, Host = "imap.gmail.com", isSSL = true, password = password, port = 993 };
+            gmail = new ConnectionInfo { email = email, Host = "imap.gmail.com", isSSL = true, password = password, port = 993 };
 
-            client.Connect (gmail.Host, gmail.port, gmail.isSSL);
-            client.Authenticate (gmail.email, gmail.password);
-			// The Inbox folder is always available on all IMAP servers...
-			inbox = client.Inbox;
+           
         }
 
-        
-        public void GetCount()
+        public ImapClient connect()
         {
-            inbox.Open (FolderAccess.ReadOnly);
-            var totalCount = inbox.Count;
-			Console.WriteLine ("Total messages: {0}", totalCount);
-            client.Dispose();
+            ImapClient client = new ImapClient();
+            //Pop3Client client = new Pop3Client(); 
+            client.Connect(gmail.Host, gmail.port, gmail.isSSL);
+            client.Authenticate(gmail.email, gmail.password);
+            return client;
         }
+
+       
+       
 
         public class EmailHeaderDto
         {
@@ -150,10 +151,89 @@ namespace MailBuster{
             public DateTime latestSentOn { get; set; }
 
         }
-        public void control()
+
+        public async Task<List<EmailDto>> GetEmailsTask(int segment, int start, int limit)
         {
-            var emails = iterateInbox();
-            analyzeUnsubscribeLink(emails);
+            List<EmailDto> emails = new List<EmailDto>();
+            var client = connect();
+            // The Inbox folder is always available on all IMAP servers...
+            IMailFolder inbox = client.Inbox;
+            try
+            {
+
+                inbox.Open(FolderAccess.ReadOnly);
+                // string tracker = File.Exists(trackerPath) ? File.ReadAllText(trackerPath) : null;
+                int totalCount = inbox.Count - 1;
+                Console.WriteLine("thread #{0} total count is {1}", segment, totalCount);
+                //if segment value is not based off zero index then it should be 1 less here 
+                int i = start + (limit * segment);
+                int end = i + limit;
+                //int limit = i + 500;
+                for (; i < end; i++)
+                {
+                    
+                    if (i % 100 == 0 || i == 0)
+                    {
+                        Console.WriteLine("Thread #{0} processed: {1} mails at time {2} & the end is nigh {3}", segment, i, DateTime.Now.TimeOfDay.ToString(), end);
+                    }
+                    var msg = inbox.GetMessage(i);
+                    mapEmail(msg, emails);
+                    //File.WriteAllText($"{basePath}tracker.txt", i.ToString());
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("Error on thread #{0} while collecting data from inbox: {1}", segment, e.Message);
+            }
+            finally
+            {
+                client.Dispose();
+            }
+            return emails;
+        }
+
+        public async Task<List<EmailDto>[]> kageBunshinNoJutsuAsync()
+        {
+            int size = 4;
+            List<EmailDto>[] emailsArray = new List<EmailDto>[size]; 
+            Task<List<EmailDto>>[] tasks = new Task<List<EmailDto>>[size];
+            for (int i = 0; i < size; i++)
+            {
+                int index = i;
+                Console.WriteLine("Creating thread #{0}", index);
+                tasks[i] = Task.Run(() => GetEmailsTask(index, 10000, 200));
+            }
+            Console.WriteLine("Start Threads & Wait");
+            
+            try
+            {
+                Task.WaitAll(tasks);
+                Console.WriteLine("Done Waiting");
+
+                
+                for(int i = 0; i < size; i++)
+                {
+                    emailsArray[i] = await tasks[i];
+                }
+
+                return emailsArray;
+            }
+            catch (Exception ex)
+            {
+                throw;
+            }
+        }
+
+        
+
+        public async void control()
+        {
+            var emailsArray = await kageBunshinNoJutsuAsync();
+            var emails = emailsArray
+                            .SelectMany(s => s)
+                            .OrderBy(o => o.sentOn)
+                            .ToList();
+            //analyzeUnsubscribeLink(emails);
             var result = analyze(emails).ToList();
             WriteToFile(result);
 
@@ -161,36 +241,36 @@ namespace MailBuster{
 
         
 
-        public List<EmailDto> iterateInbox()
-        {
-            List<EmailDto> emails = new List<EmailDto>();
-            try
-            {
-                inbox.Open(FolderAccess.ReadOnly);
-                string tracker = File.Exists(trackerPath) ?  File.ReadAllText(trackerPath) : null;
-                int totalCount = inbox.Count - 1;
-                int i = tracker == null ? 0 : int.Parse(tracker);
-                int limit = i + 500;
-                for (; i < limit; i++)
-                {
-                    if (i % 100 == 0 || i == 0)
-                    {
-                        Console.WriteLine("Processed {0} mails at time {1}", i, DateTime.Now.TimeOfDay.ToString());
-                    }
-                    var msg = inbox.GetMessage(i);
-                    mapEmail(msg, emails);
-                    File.WriteAllText($"{basePath}tracker.txt", i.ToString());
-                }
+        //public List<EmailDto> iterateInbox()
+        //{
+        //    List<EmailDto> emails = new List<EmailDto>();
+        //    try
+        //    {
+        //        inbox.Open(FolderAccess.ReadOnly);
+        //        string tracker = File.Exists(trackerPath) ?  File.ReadAllText(trackerPath) : null;
+        //        int totalCount = inbox.Count - 1;
+        //        int i = tracker == null ? 0 : int.Parse(tracker);
+        //        int limit = i + 500;
+        //        for (; i < limit; i++)
+        //        {
+        //            if (i % 100 == 0 || i == 0)
+        //            {
+        //                Console.WriteLine("Processed {0} mails at time {1}", i, DateTime.Now.TimeOfDay.ToString());
+        //            }
+        //            var msg = inbox.GetMessage(i);
+        //            mapEmail(msg, emails);
+        //            File.WriteAllText($"{basePath}tracker.txt", i.ToString());
+        //        }
 
                
 
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine("Error while collecting data from inbox: " + e.Message);
-            }
-            return emails;
-        }
+        //    }
+        //    catch (Exception e)
+        //    {
+        //        Console.WriteLine("Error while collecting data from inbox: " + e.Message);
+        //    }
+        //    return emails;
+        //}
 
         public void mapEmail(MimeMessage msg, List<EmailDto> emails)
         {
@@ -289,138 +369,7 @@ namespace MailBuster{
         }
         #endregion
 
-        #region - old code
-        public void GetStatistics(List<EmailDto> emailDtos)
-        {
-            var emailFrequency = emailDtos
-                                    .GroupBy(g => g.EmailHeaderDto.emailId)
-                                    .Select(x => new { email = x.Key, count = x.Count() })
-                                    .OrderByDescending(o => o.count)
-                                    .ThenBy(o => o.email);
-
-            //find start & end date of email range
-            var earliestEmail = emailDtos.OrderBy(o => o.EmailHeaderDto.sentOn).FirstOrDefault();
-            var oldestEmail = emailDtos.OrderBy(o => o.EmailHeaderDto.sentOn).LastOrDefault();
-            var earliestEmail2 = emailDtos.OrderBy(o => o.sentOn).FirstOrDefault();
-            var oldestEmail2 = emailDtos.OrderBy(o => o.sentOn).LastOrDefault();
-
-            //How many are missing "reply-to" header 
-            var missingReplyTo = emailDtos.Where(w => w.EmailHeaderDto.returnEmail == "" || w.EmailHeaderDto.returnEmail == null);
-            //How many are missing "List-unsub" header 
-            var missingListUnsub = emailDtos.Where(w => w.EmailHeaderDto.unsubscribeLink == "" || w.EmailHeaderDto.unsubscribeLink == null);
-            //How many are missing "Message-Id" header 
-            var missingMsgId = emailDtos.Where(w => w.EmailHeaderDto.Id == "" || w.EmailHeaderDto.Id == null);
-            //How many are missing "From" header 
-            var missingFrom = emailDtos.Where(w => w.EmailHeaderDto.emailId == "" || w.EmailHeaderDto.emailId == null && (w.from != "" || w.from == null));
-            //How many are missing "Date" header 
-            var missingDate = emailDtos.Where(w => w.EmailHeaderDto.sentOn == "" || w.EmailHeaderDto.sentOn == null && (w.sentOn < new DateTime(1996, 1, 1)));
-            //How many are missing "Subject" header 
-            var missingSubject = emailDtos.Where(w => w.EmailHeaderDto.subject == "" || w.EmailHeaderDto.subject == null);
-            //How many are missing "Sender" header 
-            var missingSender = emailDtos.Where(w => w.EmailHeaderDto.sender == "" || w.EmailHeaderDto.sender == null);
-        }
-        public void GetEmails()
-        {
-            List<EmailDto> emails = new List<EmailDto>();
-            inbox.Open(FolderAccess.ReadOnly);
-            int totalCount = inbox.Count - 1;
-            int i = 80000;
-            int end = i + 400;
-
-
-
-
-            try
-            {
-                for (; i < end; i++)
-                {
-                    if (i % 50 == 0 || i == 0)
-                    {
-                        Console.WriteLine("Processed {0} mails at time {1}", i, DateTime.Now.TimeOfDay.ToString());
-                    }
-                    EmailDto emailDto = new EmailDto();
-                    emailDto.EmailHeaderDto = new EmailHeaderDto();
-                    var msg = inbox.GetMessage(i);
-                    emailDto.textBody = emailDto.textBody;
-                    emailDto.htmlBody = msg.HtmlBody;
-                    var attachments = msg.Attachments;
-
-                    emailDto.sentOn = msg.Date.DateTime;
-                    parseHeaders(msg.Headers, emailDto);
-                    emails.Add(emailDto);
-                }
-
-                File.WriteAllText($"{basePath}tracker.txt", i.ToString());
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine("Error while collecting data from inbox: " + e.Message);
-            }
-
-
-
-            GetStatistics(emails);
-        }
-
-
-        public void GetCountMailsPerSender()
-        {
-
-            List<string> senders = new List<string>();
-            int min = 0;
-            int max = 100; //Set to -1 if not bounded
-            int multiple = 20; //Set this to 5000 or more when reading all mails
-            Dictionary<string, int> mailCountPerSender = new Dictionary<string, int>();
-            try
-            {
-                File.WriteAllText($"{basePath}hello.txt", "Hellooo!");
-
-                inbox.Open(FolderAccess.ReadOnly);
-                int totalCount = inbox.Count - 1;
-                int i = 80000;
-
-                foreach (var summary in inbox.Fetch(min, max, MessageSummaryItems.Envelope))
-                {
-                    var from = summary.Envelope.From.ToString();
-
-                    if (i % multiple == 0 || i == 0)
-                    {
-                        Console.WriteLine("Processed {0} mails by {1}", i, DateTime.Now);
-                        Console.WriteLine("Current Mail is from {0}", from);
-                    }
-
-                    senders.Add(from);
-                    mailCountPerSender[from] = mailCountPerSender.TryGetValue(from, out int fromCount) ? ++fromCount : 1;
-                    i++;
-                }
-
-                WriteToFile(mailCountPerSender);
-                var countList = SortMailCountPerSender(mailCountPerSender);
-                WriteToFile(countList);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("{0}: ERROR: {1}", DateTime.Now, ex.ToString());
-                senders.ForEach(x => File.AppendAllText($"{basePath}Senders.txt", x + '\n'));
-            }
-            finally
-            {
-                client.Dispose();
-            }
-
-        }
-
-        List<KeyValuePair<string, int>> SortMailCountPerSender(Dictionary<string, int> mailCountPerSender)
-        {
-            var countList = mailCountPerSender.ToList();
-            countList.Sort((x, y) => y.Value.CompareTo(x.Value));
-            return countList;
-        }
-
-
-        #endregion
-
-
+      
 
         public void WriteToFile(Dictionary<string, int> content)
         {
