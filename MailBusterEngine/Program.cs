@@ -8,7 +8,7 @@ namespace MailBuster
         {
             Console.WriteLine("Hello World!");
             var helper = new IMAPMailHelper();
-            helper.control();
+            helper.Control();
             //helper.GetEmails();
             //helper.GetCountMailsPerSender();
         }

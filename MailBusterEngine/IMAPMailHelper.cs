@@ -11,28 +11,17 @@ using MailKit.Net.Pop3;
 using Microsoft.Extensions.Configuration;
 using System.Threading.Tasks;
 using System.Threading;
-
+using MailBusterEngine.Dto;
+using MailBusterEngine.Helper;
 
 namespace MailBuster{
     public class IMAPMailHelper 
     {
         private readonly IConfiguration _configuration;
-
-        
-
-        static string basePath = "..\\..\\..\\Filestore\\";
-        static string trackerPath = $"{basePath}tracker.txt";
-        ConnectionInfo gmail;
-
-        class ConnectionInfo
-        {
-            public string Host { get; set; }
-            public int port { get; set; }
-            public bool isSSL { get; set; }
-            public string email { get; set; }
-            public string password { get; set; }
-
-        }
+        static readonly string basePath = "..\\..\\..\\Filestore\\";
+        static readonly string trackerPath = $"{basePath}tracker.txt";
+        private readonly ConnectionInfo gmail;
+       
 
         public IMAPMailHelper()
         {
@@ -52,7 +41,7 @@ namespace MailBuster{
            
         }
 
-        public ImapClient connect()
+        public ImapClient Connect()
         {
             ImapClient client = new ImapClient();
             //Pop3Client client = new Pop3Client(); 
@@ -61,36 +50,22 @@ namespace MailBuster{
             return client;
         }
 
-       
-       
 
-        public class EmailHeaderDto
+        #region mappers
+        public void MapEmail(MimeMessage msg, List<Email> emails)
         {
-            public string returnEmail { get; set; }
-            public string unsubscribeLink { get; set; }
-
-            public string Id { get; set; }
-            public string emailId { get; set; }
-            public string sentOn { get; set; }
-            public string sender { get; set; }
-            public string subject { get; set; }
-
+            Email emailDto = new Email();
+            emailDto.EmailHeaderDto = new EmailHeader();
+            emailDto.textBody = msg.TextBody;
+            emailDto.htmlBody = msg.HtmlBody;
+            emailDto.from = msg.From.ToString();
+            emailDto.sentOn = msg.Date.DateTime;
+            emailDto.sentOn = msg.Date.DateTime;
+            MapHeaders(msg.Headers, emailDto);
+            emails.Add(emailDto);
 
         }
-
-        public class EmailDto
-        {
-            public EmailHeaderDto EmailHeaderDto { get; set; }
-            public string textBody { get; set; }
-            public string htmlBody { get; set; }
-            public string from { get; set; }
-           
-            public DateTime sentOn { get; set; }
-
-        }
-
-        
-        public void parseHeaders(HeaderList headers, EmailDto emailDto)
+        public void MapHeaders(HeaderList headers, Email emailDto)
         {
            
             foreach (Header header in headers)
@@ -124,38 +99,30 @@ namespace MailBuster{
                 }
             }
         }
+        #endregion
 
-      
 
 
         #region start
-        public class EmailDetails
+
+        public async void Control()
         {
-            public string from { get; set; }
-            public string subject { get; set; }
-            public DateTime sentOn { get; set; }
-            public string unsubscribeLinkFromHeader { get; set; }
-            public string unsubscribeLinkFromBody { get; set; }
-        }
-
-        public class EmailStats
-        {
-            public string emailId {get; set;}
-            public int count {get; set;}
-            public double avgGap { get; set; }
-            public int maxGap { get; set; }
-
-            public int minGap { get; set; }
-
-            public DateTime earliestSentOn { get; set; }
-            public DateTime latestSentOn { get; set; }
+            var emailsArray = await KageBunshinNoJutsuAsync();
+            var emails = emailsArray
+                            .SelectMany(s => s)
+                            .OrderBy(o => o.sentOn)
+                            .ToList();
+            //analyzeUnsubscribeLink(emails);
+            var result = Analyze(emails).ToList();
+            var fileHelper = new FileHelper(basePath);
+            fileHelper.WriteToFile(result);
 
         }
 
-        public async Task<List<EmailDto>> GetEmailsTask(int segment, int start, int limit)
+        public async Task<List<Email>> GetEmailsTask(int segment, int start, int limit)
         {
-            List<EmailDto> emails = new List<EmailDto>();
-            var client = connect();
+            List<Email> emails = new List<Email>();
+            var client = Connect();
             // The Inbox folder is always available on all IMAP servers...
             IMailFolder inbox = client.Inbox;
             try
@@ -177,7 +144,7 @@ namespace MailBuster{
                         Console.WriteLine("Thread #{0} processed: {1} mails at time {2} & the end is nigh {3}", segment, i, DateTime.Now.TimeOfDay.ToString(), end);
                     }
                     var msg = inbox.GetMessage(i);
-                    mapEmail(msg, emails);
+                    MapEmail(msg, emails);
                     //File.WriteAllText($"{basePath}tracker.txt", i.ToString());
                 }
             }
@@ -192,11 +159,11 @@ namespace MailBuster{
             return emails;
         }
 
-        public async Task<List<EmailDto>[]> kageBunshinNoJutsuAsync()
+        public async Task<List<Email>[]> KageBunshinNoJutsuAsync()
         {
             int size = 4;
-            List<EmailDto>[] emailsArray = new List<EmailDto>[size]; 
-            Task<List<EmailDto>>[] tasks = new Task<List<EmailDto>>[size];
+            List<Email>[] emailsArray = new List<Email>[size]; 
+            Task<List<Email>>[] tasks = new Task<List<Email>>[size];
             for (int i = 0; i < size; i++)
             {
                 int index = i;
@@ -224,95 +191,21 @@ namespace MailBuster{
             }
         }
 
-        
-
-        public async void control()
+        public double CalculateStandardDeviation(List<double> numbers, double average)
         {
-            var emailsArray = await kageBunshinNoJutsuAsync();
-            var emails = emailsArray
-                            .SelectMany(s => s)
-                            .OrderBy(o => o.sentOn)
-                            .ToList();
-            //analyzeUnsubscribeLink(emails);
-            var result = analyze(emails).ToList();
-            WriteToFile(result);
-
+            double sumOfSquaresOfDifferences = numbers.Select(val => Math.Pow(val - average, 2)).Sum();
+            return Math.Sqrt(sumOfSquaresOfDifferences / numbers.Count);
         }
 
-        
-
-        //public List<EmailDto> iterateInbox()
-        //{
-        //    List<EmailDto> emails = new List<EmailDto>();
-        //    try
-        //    {
-        //        inbox.Open(FolderAccess.ReadOnly);
-        //        string tracker = File.Exists(trackerPath) ?  File.ReadAllText(trackerPath) : null;
-        //        int totalCount = inbox.Count - 1;
-        //        int i = tracker == null ? 0 : int.Parse(tracker);
-        //        int limit = i + 500;
-        //        for (; i < limit; i++)
-        //        {
-        //            if (i % 100 == 0 || i == 0)
-        //            {
-        //                Console.WriteLine("Processed {0} mails at time {1}", i, DateTime.Now.TimeOfDay.ToString());
-        //            }
-        //            var msg = inbox.GetMessage(i);
-        //            mapEmail(msg, emails);
-        //            File.WriteAllText($"{basePath}tracker.txt", i.ToString());
-        //        }
-
-               
-
-        //    }
-        //    catch (Exception e)
-        //    {
-        //        Console.WriteLine("Error while collecting data from inbox: " + e.Message);
-        //    }
-        //    return emails;
-        //}
-
-        public void mapEmail(MimeMessage msg, List<EmailDto> emails)
-        {
-            EmailDto emailDto = new EmailDto();
-            emailDto.EmailHeaderDto = new EmailHeaderDto();
-            emailDto.textBody = msg.TextBody;
-            emailDto.htmlBody = msg.HtmlBody;
-            emailDto.from = msg.From.ToString();
-            emailDto.sentOn = msg.Date.DateTime;
-            emailDto.sentOn = msg.Date.DateTime;
-            parseHeaders(msg.Headers, emailDto);
-            emails.Add(emailDto);
-
-        }
-
-        public class datesByEmail
-        {
-            public List<DateTime> sentOnList { get; set; }
-            //string from;
-        }
-
-
-        public class EmailAnalytics
-        {
-            public string Email { get; set; }
-            public double AverageGap { get; set; }
-            public int Count { get; set; }
-            public Double Score { get; set; }
-            //string from;
-        }
-
-
-
-        public IEnumerable<EmailAnalytics> analyze(List<EmailDto> emails)
+        public IEnumerable<EmailAnalytics> Analyze(List<Email> emails)
         {
 
-            Dictionary<string, datesByEmail> ls = new Dictionary<string, datesByEmail>();
+            Dictionary<string, DatesByEmail> ls = new Dictionary<string, DatesByEmail>();
            
 
             foreach (var email in emails)
             {
-                var tmp = new datesByEmail() { sentOnList = new List<DateTime> { email.sentOn } };
+                var tmp = new DatesByEmail() { sentOnList = new List<DateTime> { email.sentOn } };
                 if (!ls.ContainsKey(email.from))
                 {
                     ls.Add(email.from, tmp);
@@ -331,10 +224,12 @@ namespace MailBuster{
                 var dateList = item.Value.sentOnList;
                 var gaps = item.Value.sentOnList.Zip(dateList.Skip(1), (d1, d2) => (d2 - d1).TotalDays).ToList();
                 var avg = gaps.Count != 0 ? gaps.Average() : -1;
+                var stddev = gaps.Count != 0 ? CalculateStandardDeviation(gaps, avg): -1;
                 emailAnalyticsLs.Add(new EmailAnalytics() 
                                         { 
-                                            Email = item.Key, 
+                                            EmailId = item.Key, 
                                             AverageGap = avg, 
+                                            StandardDeviation = stddev,
                                             Count = dateList.Count(), 
                                             Score = dateList.Count() / avg
                                         });
@@ -345,15 +240,18 @@ namespace MailBuster{
                         .Where(w => w.Count > 5 || w.AverageGap > 1 || w.AverageGap == -1)
                         .OrderByDescending(o => o.Score);
             var y = emailAnalyticsLs.OrderByDescending(o => o.Count).ThenByDescending(o => o.Score);
+
+            var z = emailAnalyticsLs
+                        .GroupBy(g => g.Count)
+                        .Select(s => new { Frequency = s.Key, Count = s.Count(), Total = s.Key * s.Count() })
+                        .OrderBy(o => o.Frequency);
+
+            var sum = z.Sum(s => s.Total);
+
             return y;
         }
 
-
-        
-
-        
-
-        public void analyzeUnsubscribeLink(List<EmailDto> emails)
+        public void AnalyzeUnsubscribeLink(List<Email> emails)
         {
             //find emails that do not have unsubscribe link in header
             var countMissingFromHeader = emails.Where(x => x.EmailHeaderDto.unsubscribeLink == null).ToList();
@@ -368,48 +266,6 @@ namespace MailBuster{
             
         }
         #endregion
-
-      
-
-        public void WriteToFile(Dictionary<string, int> content)
-        {
-            string jsonText = JsonConvert.SerializeObject(content);
-            File.WriteAllText($"{basePath}MailCountPerSender.txt", jsonText);
-        }
-
-        public void WriteToFile(List<KeyValuePair<string, int>> content)
-        {
-
-            foreach (var item in content) 
-            {
-                File.AppendAllText($"{basePath}SortedMailCountPerSender.txt", $"{item.Key}: {item.Value} \n" );
-            }
-        }
-
-        public void WriteToFile(List<EmailAnalytics> content)
-        {
-            string json = JsonConvert.SerializeObject(content);
-            File.AppendAllText($"{basePath}EmailAnalytics.json", json); 
-            foreach (var item in content)
-            {
-                //string json = JsonConvert.SerializeObject(item);
-                //File.AppendAllText($"{basePath}EmailAnalytics.json", json + "\n");
-                File.AppendAllText($"{basePath}EmailAnalytics.txt", $"Email: {item.Email}, AvgGap: {item.AverageGap}, Count: {item.Count}, Score: {item.Score} \n");
-            }
-        }
-
-        public bool IsDataAvailable()
-        {
-            FileInfo file = new FileInfo(@"C:\Workspace\DotNet\MailBuster\Filestore\SortedMailCountPerSender.txt");
-
-            if(file.Exists && file.Length > 0)
-            {
-                return true;
-            }
-
-            return false;
-        }
-
        
     }
 }
