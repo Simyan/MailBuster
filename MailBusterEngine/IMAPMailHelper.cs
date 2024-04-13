@@ -21,6 +21,7 @@ namespace MailBuster{
         static readonly string basePath = "..\\..\\..\\Filestore\\";
         static readonly string trackerPath = $"{basePath}tracker.txt";
         private readonly ConnectionInfo gmail;
+        private readonly int numberOfThreads = 4;
        
 
         public IMAPMailHelper()
@@ -161,10 +162,10 @@ namespace MailBuster{
 
         public async Task<List<Email>[]> KageBunshinNoJutsuAsync()
         {
-            int size = 4;
-            List<Email>[] emailsArray = new List<Email>[size]; 
-            Task<List<Email>>[] tasks = new Task<List<Email>>[size];
-            for (int i = 0; i < size; i++)
+            
+            List<Email>[] emailsArray = new List<Email>[numberOfThreads]; 
+            Task<List<Email>>[] tasks = new Task<List<Email>>[numberOfThreads];
+            for (int i = 0; i < numberOfThreads; i++)
             {
                 int index = i;
                 Console.WriteLine("Creating thread #{0}", index);
@@ -178,7 +179,7 @@ namespace MailBuster{
                 Console.WriteLine("Done Waiting");
 
                 
-                for(int i = 0; i < size; i++)
+                for(int i = 0; i < numberOfThreads; i++)
                 {
                     emailsArray[i] = await tasks[i];
                 }
@@ -231,8 +232,9 @@ namespace MailBuster{
                                             AverageGap = avg, 
                                             StandardDeviation = stddev,
                                             Count = dateList.Count(), 
-                                            Score = dateList.Count() / avg
-                                        });
+                                            Score = dateList.Count() / avg,
+                                            Score2 = (dateList.Count() / (avg * stddev)) 
+                });
 
             }
 
@@ -240,6 +242,7 @@ namespace MailBuster{
                         .Where(w => w.Count > 5 || w.AverageGap > 1 || w.AverageGap == -1)
                         .OrderByDescending(o => o.Score);
             var y = emailAnalyticsLs.OrderByDescending(o => o.Count).ThenByDescending(o => o.Score);
+            var y2 = emailAnalyticsLs.OrderByDescending(o => o.Count).ThenByDescending(o => o.Score2);
 
             var z = emailAnalyticsLs
                         .GroupBy(g => g.Count)
